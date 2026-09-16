@@ -2,7 +2,11 @@ name: Deploy React App to GitHub Pages
 
 on:
   push:
-    branches: [ main ] # ou master selon ta branche principale
+    branches: [ main ] # ou master selon ta branche
+
+# 1. AJOUTER CE BLOC PERMISSIONS ICI
+permissions:
+  contents: write
 
 jobs:
   build-and-deploy:
@@ -11,7 +15,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js (Version 20)
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -25,7 +29,8 @@ jobs:
         run: yarn build
 
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+        # 2. UTILISER v4 ICI AU LIEU DE v3
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./build # (Remplace par './dist' si ton dossier de build s'appelle dist)
+          publish_dir: ./build # (ou ./dist selon ton dossier de sortie)
