@@ -1,0 +1,49 @@
+{
+    "eng": {
+        "name": "English",
+        "formalName": "English",
+        "codeName": "eng",
+        "initialMessage": "Loading fonts and scripts…",
+        "order": 1,
+        "active": true
+    },
+    "fra": {
+        "name": "Français",
+        "formalName": "French",
+        "codeName": "fra",
+        "initialMessage": "Chargement en cours…",
+        "order": 2,
+        "active": true
+    },
+    "jap": {
+        "name": "日本語",
+        "formalName": "Japanese",
+        "codeName": "jap",
+        "initialMessage": "フォントとスクリプトを読み込んでいます…",
+        "order": 3,
+        "style": {
+            "font-family": "'Yu-Gi-Oh! DF Leisho 3'",
+            "--width-label": "140px"
+        },
+        "active": true
+    },
+    "vie": {
+        "name": "Việt",
+        "formalName": "Vietnamese",
+        "codeName": "vie",
+        "initialMessage": "Đang tải phông chữ…",
+        "order": 4,
+        "style": {
+            "--width-label": "110px"
+        },
+        "active": true
+    },
+    "def": {
+        "name": "Default",
+        "formalName": "Default",
+        "codeName": "def",
+        "initialMessage": "",
+        "order": 1000,
+        "active": false
+    }
+}
