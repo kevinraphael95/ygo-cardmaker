@@ -92,3 +92,9 @@ export const getImageCacheStats = async (): Promise<{ count: number; sizeMB: num
         return { count: 0, sizeMB: 0 };
     }
 };
+
+// ⚡ Exposition globale pour tests dans la console
+if (typeof window !== 'undefined') {
+    (window as any).getImageCacheStats = getImageCacheStats;
+    (window as any).clearImageCache = clearImageCache;
+}
