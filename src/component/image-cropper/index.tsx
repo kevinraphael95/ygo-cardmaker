@@ -191,6 +191,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     const [error, setError] = useState<any>(null);
     const [interacted, setInteracted] = useState(false);
     const [externalSource, setExternalSource] = useState(defaultExternalSource);
+    // ⚡ Blob URL de l'image téléchargée via proxy (évite le canvas tainted)
+    const [proxiedBlobUrl, setProxiedBlobUrl] = useState('');
     const imgRef = useRef<HTMLImageElement | null>(null);
     const [crop, setCrop] = useState({
         current: defaultCropInfo,
@@ -226,6 +228,38 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             onMaxSizeExceeded(maxFileSize);
         }
     };
+
+    // ⚡ Fetch l'image via proxy → si OK, on crée un blob URL (jamais tainted)
+    //                     → si 404, on garde un blob URL vide (image custom absente)
+    useEffect(() => {
+        if (sourceType !== 'online' || !externalSource) {
+            setProxiedBlobUrl('');
+            return;
+        }
+        let cancelled = false;
+        setLoading(true);
+        const url = proxifyExternalUrl(externalSource);
+        fetch(url, { mode: 'cors' })
+            .then(res => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return res.blob();
+            })
+            .then(blob => {
+                if (cancelled) return;
+                setProxiedBlobUrl(URL.createObjectURL(blob));
+                setError(null);
+                setLoading(false);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setProxiedBlobUrl('');
+                setError('Image not found (404)');
+                setLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [externalSource, sourceType]);
 
     const pendingCrop = useRef({
         source: '',
@@ -454,6 +488,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     const hasImage = (sourceType === 'offline' && (internalSource ?? '').length > 0)
         || (sourceType === 'online' && (externalSource ?? '').length > 0);
     const isDownloadable = receivingCanvas && hasImage && !isLoading && completedCrop?.width && completedCrop?.height;
+    // ⚡ Source finale pour ReactCrop : offline = source interne, online = blob URL du proxy
+    const finalSource = sourceType === 'offline' ? internalSource : proxiedBlobUrl;
     return (
         <div className={mergeClass('card-image-cropper', className)}>
             <div className="card-image-source-input">
@@ -624,12 +660,12 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                         </div>
                     </Tooltip>}
                 </div>}
-                {((!hasImage || (error && crossorigin === undefined)) && !isLoading) && <Empty
-                    description={language['image-cropper.not-found-warning']}
+                {((!hasImage || error) && !isLoading) && <Empty
+                    description={error || language['image-cropper.not-found-warning']}
                     image={null}
                 />}
-                <ReactCrop key={`${sourceType}-${isMigrated}-${redrawSignal}`}
-                    src={sourceType === 'offline' ? internalSource : proxifyExternalUrl(externalSource)}
+                {finalSource && !error && <ReactCrop key={`${sourceType}-${isMigrated}-${redrawSignal}-${proxiedBlobUrl.slice(-20)}`}
+                    src={finalSource}
                     disabled={forceFit}
                     className={forceFit ? 'force-fitted' : ''}
                     imageStyle={backgroundColor
@@ -641,39 +677,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                         }}
                     onImageLoaded={onLoad}
                     onImageError={() => {
-                        if (!receivingCanvas) {
-                            pendingCrop.current = {
-                                source: '',
-                                crop: null,
-                            };
-                            setLoading(false);
-                            setError('No receiving canvas');
-                            onTainted();
-                        }
-                        else if (
-                            (sourceType === 'online' && (externalSource ?? '') === '')
-                            || (sourceType === 'offline' && (internalSource ?? '') === '')
-                        ) {
-                            pendingCrop.current = {
-                                source: '',
-                                crop: null,
-                            };
-                            const { width, height } = receivingCanvas;
-                            const ctx = receivingCanvas.getContext('2d');
-
-                            ctx?.clearRect(0, 0, width, height);
-                            if (completedCrop) onCropChange(completedCrop, sourceType, interacted);
-                            onSourceLoaded(crossorigin);
-                            setLoading(false);
-                            setError('Image not found');
-                        } else {
-                            setCrossOrigin(undefined);
-                            onTainted();
-                        }
-                        if (crossorigin === undefined) {
-                            setLoading(false);
-                            setError('Tainted canvas');
-                        }
+                        setLoading(false);
+                        setError('Image not found');
                     }}
                     crop={currentCrop}
                     onDragStart={() => {
@@ -704,7 +709,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                     }}
                     ruleOfThirds={true}
                     crossorigin={crossorigin}
-                />
+                />}
             </div>
         </div>
     );
