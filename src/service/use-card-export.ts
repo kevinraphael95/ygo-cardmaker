@@ -217,12 +217,20 @@ export const useCardExport = ({
                             }
                             if (isBatchDownloading && !batchDataMap[normalizedCard.id]) {
                                 setTimeout(() => {
+                                    // ⚡ NOUVEAU : nom de fichier basé sur l'ID uniquement
+                                    //    → compatible avec les noms de fichiers EDOPro/ProjectIgnis (ex: 46986414.jpg)
                                     addToCurrentBatch(
-                                        exportScheme === 'with-name'
-                                            ? `${normalizedName}.png`
-                                            : `${normalizedCard.setId} - ${normalizedName}.png`,
+                                        `${normalizedCard.id}.png`,
                                         normalizedCard.id,
                                     );
+
+                                    // ⚡ ANCIEN COMPORTEMENT (à réactiver si besoin) :
+                                    // addToCurrentBatch(
+                                    //     exportScheme === 'with-name'
+                                    //         ? `${normalizedName}.png`
+                                    //         : `${normalizedCard.setId} - ${normalizedName}.png`,
+                                    //     normalizedCard.id,
+                                    // );
                                 }, 200);
                             }
                         }
