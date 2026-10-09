@@ -4,9 +4,10 @@ import ReactCrop from 'react-image-crop';
 import { DownloadOutlined, FullscreenOutlined, VerticalAlignMiddleOutlined } from '@ant-design/icons';
 import { Loading } from '../loading';
 import { IconButton } from '../icon-button';
-import { useGlobal, useLanguage } from 'src/service';
+import { useGlobal, useLanguage, useCard } from 'src/service';
 import { mergeClass } from 'src/util';
 import { DropZone } from '../atom';
+import { getCachedImage, setCachedImage } from 'src/draw/image-cache';
 import 'react-image-crop/dist/ReactCrop.css';
 import './image-cropper.scss';
 
@@ -23,6 +24,29 @@ const proxifyExternalUrl = (url: string): string => {
     if (url.startsWith(window.location.origin)) return url;
     const cleaned = url.replace(/^https?:\/\//i, '');
     return CORS_PROXY + encodeURIComponent(cleaned);
+};
+
+// ⚡ Cache nom → ID YGOPRODeck (évite 2x le même appel API)
+const nameToIdCache = new Map<string, string | null>();
+
+const resolveIdByName = async (cardName: string): Promise<string | null> => {
+    if (!cardName || cardName.length < 3) return null;
+    if (nameToIdCache.has(cardName)) return nameToIdCache.get(cardName) ?? null;
+    try {
+        const url = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(cardName)}`;
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) {
+            nameToIdCache.set(cardName, null);
+            return null;
+        }
+        const data = await res.json();
+        const realId = data?.data?.[0]?.id ? String(data.data[0].id) : null;
+        nameToIdCache.set(cardName, realId);
+        return realId;
+    } catch {
+        nameToIdCache.set(cardName, null);
+        return null;
+    }
 };
 
 function generateDownload(canvas: HTMLCanvasElement | null, crop: ReactCrop.Crop | null) {
@@ -177,6 +201,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         ? 'offline'
         : 'online';
     const language = useLanguage();
+    // ⚡ Récupère la carte active pour le fallback nom→ID
+    const { card: activeCard } = useCard();
     const fileInputRef = useRef<Input>(null);
     const [
         crossorigin,
@@ -230,7 +256,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     };
 
     // ⚡ Fetch l'image via proxy → si OK, on crée un blob URL (jamais tainted)
-    //                     → si 404, on garde un blob URL vide (image custom absente)
+    //     Si l'ID est custom (VAACT, etc.) → résolution par nom via l'API YGOPRODeck
+    //     Si 404 → pas d'image (mais pas d'erreur bloquante)
     useEffect(() => {
         if (sourceType !== 'online' || !externalSource) {
             setProxiedBlobUrl('');
@@ -238,28 +265,53 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         }
         let cancelled = false;
         setLoading(true);
-        const url = proxifyExternalUrl(externalSource);
-        fetch(url, { mode: 'cors' })
-            .then(res => {
+        (async () => {
+            try {
+                // ⚡ Étape 1 : extrait l'ID depuis l'URL
+                const idMatch = externalSource.match(/\/(\d+)\.jpg$/);
+                const rawId = idMatch ? idMatch[1] : null;
+
+                // ⚡ Étape 2 : ID court (< 8 chiffres) = vrai passcode Konami
+                //             sinon custom → résoudre par nom
+                let realId: string | null = rawId;
+                if (!realId || realId.length > 8) {
+                    realId = await resolveIdByName(activeCard?.name ?? '');
+                }
+                if (!realId) throw new Error('No YGOPRODeck ID');
+
+                // ⚡ Étape 3 : vérifie le cache IDB d'abord
+                const rawUrl = `https://images.ygoprodeck.com/images/cards_cropped/${realId}.jpg`;
+                const cached = await getCachedImage(rawUrl);
+                if (cached) {
+                    if (cancelled) return;
+                    setProxiedBlobUrl(URL.createObjectURL(cached));
+                    setError(null);
+                    setLoading(false);
+                    return;
+                }
+
+                // ⚡ Étape 4 : fetch via proxy
+                const proxyUrl = proxifyExternalUrl(rawUrl);
+                const res = await fetch(proxyUrl, { mode: 'cors' });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                return res.blob();
-            })
-            .then(blob => {
+                const blob = await res.blob();
+                await setCachedImage(rawUrl, blob);
+
                 if (cancelled) return;
                 setProxiedBlobUrl(URL.createObjectURL(blob));
                 setError(null);
                 setLoading(false);
-            })
-            .catch(() => {
+            } catch {
                 if (cancelled) return;
                 setProxiedBlobUrl('');
-                setError('Image not found (404)');
+                setError('Image not found');
                 setLoading(false);
-            });
+            }
+        })();
         return () => {
             cancelled = true;
         };
-    }, [externalSource, sourceType]);
+    }, [externalSource, sourceType, activeCard?.name]);
 
     const pendingCrop = useRef({
         source: '',
