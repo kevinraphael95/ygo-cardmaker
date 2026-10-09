@@ -43,7 +43,8 @@ export const useCardExport = ({
         isBatchDownloading,
     } = useBatchDownload();
     const resolution = useSetting(state => state.setting.resolution);
-    const exportScheme = useSetting(state => state.setting.exportScheme);
+    // ⚡ Désactivé : on n'utilise plus le nom de fichier custom (IDs uniquement)
+    // const exportScheme = useSetting(state => state.setting.exportScheme);
     const {
         opacity,
         name,
