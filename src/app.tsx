@@ -63,6 +63,12 @@ import { configure, HotKeys } from 'react-hotkeys';
 import { useShallow } from 'zustand/react/shallow';
 import * as Sentry from '@sentry/react';
 import Moveable from 'react-moveable';
+// ⚡ Expose le cache d'images pour tests dans la console
+import { getImageCacheStats, clearImageCache } from './draw/image-cache';
+if (typeof window !== 'undefined') {
+    (window as any).getImageCacheStats = getImageCacheStats;
+    (window as any).clearImageCache = clearImageCache;
+}
 
 /** React hotkey setup */
 configure({
