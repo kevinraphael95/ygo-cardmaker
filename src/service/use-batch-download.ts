@@ -1,30 +1,72 @@
 import { create } from 'zustand';
 import { getCachedImage, setCachedImage } from 'src/draw/image-cache';
+import { useCardList } from './use-card-list';
 
 // ════════════════════════════════════════════════════════════════════════════
-// ⚡ PRÉCHARGEMENT PARALLÈLE DES ILLUSTRATIONS
+// ⚡ PRÉCHARGEMENT PARALLELE AVEC FALLBACK NOM → ID
 // ════════════════════════════════════════════════════════════════════════════
-// Quand un batch démarre, on précharge toutes les images en parallèle (6 à la
-// fois max) → les illustrations sont en cache IDB avant d'être utilisées.
-// Résultat : le batch qui était séquentiel devient quasi-instantané.
+// Problème : les cartes custom (VAACT, ProjectIgnis…) ont des IDs 910001XXX
+// qui n'existent pas sur YGOPRODeck → 404 → lent + image blanche.
+//
+// Solution : si l'ID n'est pas un passcode Konami (< 8 chiffres), on cherche
+// l'ID réel via l'API YGOPRODeck par nom, puis on télécharge l'image.
 // ════════════════════════════════════════════════════════════════════════════
 
 const CORS_PROXY = 'https://images.weserv.nl/?url=';
 const PRELOAD_CONCURRENCY = 6;
 
-const preloadOneImage = async (cardId: string): Promise<'ok' | 'cached' | 'fail'> => {
-    const rawUrl = `https://images.ygoprodeck.com/images/cards_cropped/${cardId}.jpg`;
+// Cache mémoire pour éviter de chercher 2x le même nom
+const nameToIdCache = new Map<string, string | null>();
+
+const resolveIdByName = async (cardName: string): Promise<string | null> => {
+    if (!cardName || cardName.length < 3) return null;
+    if (nameToIdCache.has(cardName)) return nameToIdCache.get(cardName) ?? null;
+
     try {
-        // Déjà en cache ?
+        const url = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(cardName)}`;
+        const res = await fetch(url, { mode: 'cors' });
+        if (!res.ok) {
+            nameToIdCache.set(cardName, null);
+            return null;
+        }
+        const data = await res.json();
+        const card = data?.data?.[0];
+        const realId = card?.id ? String(card.id) : null;
+        nameToIdCache.set(cardName, realId);
+        return realId;
+    } catch {
+        nameToIdCache.set(cardName, null);
+        return null;
+    }
+};
+
+const preloadOneImage = async (
+    cardId: string,
+    cardName: string,
+): Promise<'ok' | 'cached' | 'fail' | 'skip'> => {
+    // ⚡ Détermine l'ID YGOPRODeck à utiliser
+    let ygoprodeckId: string | null = null;
+
+    // ID numérique court (< 8 chiffres) = probablement un vrai passcode Konami
+    if (/^\d{1,8}$/.test(cardId)) {
+        ygoprodeckId = cardId;
+    } else {
+        // ID custom (hash, 910001XXX…) → chercher par nom
+        ygoprodeckId = await resolveIdByName(cardName);
+    }
+
+    if (!ygoprodeckId) return 'skip';
+
+    const rawUrl = `https://images.ygoprodeck.com/images/cards_cropped/${ygoprodeckId}.jpg`;
+    try {
         const cached = await getCachedImage(rawUrl);
         if (cached) return 'cached';
 
-        // Sinon → fetch via proxy
         const proxyUrl = CORS_PROXY + encodeURIComponent(
-            `images.ygoprodeck.com/images/cards_cropped/${cardId}.jpg`
+            `images.ygoprodeck.com/images/cards_cropped/${ygoprodeckId}.jpg`
         );
         const res = await fetch(proxyUrl, { mode: 'cors' });
-        if (!res.ok) return 'fail';  // 404 sur les cartes custom
+        if (!res.ok) return 'fail';
         const blob = await res.blob();
         await setCachedImage(rawUrl, blob);
         return 'ok';
@@ -33,40 +75,37 @@ const preloadOneImage = async (cardId: string): Promise<'ok' | 'cached' | 'fail'
     }
 };
 
-const preloadAllCardImages = async (cardIds: string[]): Promise<void> => {
-    const queue = [...cardIds];
-    let done = 0;
-    let ok = 0;
-    let cached = 0;
-    let failed = 0;
+const preloadAllCardImages = async (
+    cards: { id: string; name: string }[],
+): Promise<void> => {
+    const queue = [...cards];
+    let done = 0, ok = 0, cached = 0, failed = 0, skipped = 0;
     const total = queue.length;
 
     console.log(`[Batch] ⚡ Préchargement de ${total} images (${PRELOAD_CONCURRENCY} en parallèle)…`);
 
     const worker = async () => {
         while (queue.length > 0) {
-            const id = queue.shift();
-            if (!id) break;
-            const result = await preloadOneImage(id);
+            const card = queue.shift();
+            if (!card) break;
+            const result = await preloadOneImage(card.id, card.name);
             done++;
             if (result === 'ok') ok++;
             else if (result === 'cached') cached++;
-            else failed++;
+            else if (result === 'fail') failed++;
+            else skipped++;
 
-            // Log tous les 50
             if (done % 50 === 0 || done === total) {
-                console.log(`[Batch] Préchargé ${done}/${total} · ${ok} nouveaux · ${cached} en cache · ${failed} échecs`);
+                console.log(`[Batch] ${done}/${total} · ${ok} nouveaux · ${cached} cache · ${failed} échecs · ${skipped} skip`);
             }
         }
     };
 
     const workers: Promise<void>[] = [];
-    for (let i = 0; i < PRELOAD_CONCURRENCY; i++) {
-        workers.push(worker());
-    }
+    for (let i = 0; i < PRELOAD_CONCURRENCY; i++) workers.push(worker());
     await Promise.all(workers);
 
-    console.log(`[Batch] ✅ Préchargement terminé : ${ok} nouveaux, ${cached} en cache, ${failed} échecs`);
+    console.log(`[Batch] ✅ Préchargement terminé : ${ok} nouveaux, ${cached} en cache, ${failed} échecs, ${skipped} skip`);
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -97,9 +136,14 @@ export const useBatchDownload = create<BatchDownloadStore>((set, get) => {
                 isBatchDownloading: true,
             });
 
-            // ⚡ Préchargement en arrière-plan : télécharge toutes les images
-            //    en parallèle pour que le batch soit quasi-instantané ensuite.
-            preloadAllCardImages(batchQueue).catch(err => {
+            // ⚡ Récupère les noms depuis cardList pour le fallback nom→ID
+            const { cardList } = useCardList.getState();
+            const cardsWithNames = batchQueue.map(id => {
+                const card = cardList.find(c => c.id === id);
+                return { id, name: card?.name ?? '' };
+            });
+
+            preloadAllCardImages(cardsWithNames).catch(err => {
                 console.warn('[Batch] Préchargement échoué', err);
             });
         },
