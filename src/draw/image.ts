@@ -14,7 +14,10 @@ const acquireSlot = (): Promise<void> => {
         return Promise.resolve();
     }
     return new Promise(resolve => {
-        loadQueue.push(() => { activeLoads++; resolve(); });
+        loadQueue.push(() => {
+            activeLoads++;
+            resolve();
+        });
     });
 };
 
