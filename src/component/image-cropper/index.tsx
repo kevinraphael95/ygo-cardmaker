@@ -12,6 +12,19 @@ import './image-cropper.scss';
 
 export const CROPPER_WIDTH = 375;
 
+// ⚡ Proxy CORS pour les images externes (YGOPRODeck, etc.)
+// YGOPRODeck ne renvoie pas les headers CORS → canvas tainted → export impossible
+const CORS_PROXY = 'https://images.weserv.nl/?url=';
+
+const proxifyExternalUrl = (url: string): string => {
+    if (!url) return url;
+    if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('/')) return url;
+    if (url.includes('images.weserv.nl') || url.includes('wsrv.nl')) return url;
+    if (url.startsWith(window.location.origin)) return url;
+    const cleaned = url.replace(/^https?:\/\//i, '');
+    return CORS_PROXY + encodeURIComponent(cleaned);
+};
+
 function generateDownload(canvas: HTMLCanvasElement | null, crop: ReactCrop.Crop | null) {
     if (!crop || !canvas) return;
     canvas.toBlob(
@@ -616,7 +629,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                     image={null}
                 />}
                 <ReactCrop key={`${sourceType}-${isMigrated}-${redrawSignal}`}
-                    src={sourceType === 'offline' ? internalSource : externalSource}
+                    src={sourceType === 'offline' ? internalSource : proxifyExternalUrl(externalSource)}
                     disabled={forceFit}
                     className={forceFit ? 'force-fitted' : ''}
                     imageStyle={backgroundColor
