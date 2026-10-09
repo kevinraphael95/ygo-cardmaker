@@ -221,7 +221,7 @@ export const useCardExport = ({
                                     // ⚡ NOUVEAU : nom de fichier basé sur l'ID uniquement
                                     //    → compatible avec les noms de fichiers EDOPro/ProjectIgnis (ex: 46986414.jpg)
                                     addToCurrentBatch(
-                                        `${normalizedCard.id}.png`,
+                                        `${normalizedCard.setId}.png`,
                                         normalizedCard.id,
                                     );
 
