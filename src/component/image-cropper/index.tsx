@@ -30,10 +30,12 @@ function generateDownload(canvas: HTMLCanvasElement | null, crop: ReactCrop.Crop
         (blob) => {
             if (blob !== null) {
                 const previewUrl = window.URL.createObjectURL(blob);
+
                 const anchor = document.createElement('a');
                 anchor.download = 'crop-preview.png';
                 anchor.href = URL.createObjectURL(blob);
                 anchor.click();
+
                 window.URL.revokeObjectURL(previewUrl);
             }
         },
@@ -62,11 +64,13 @@ const normalizeCrop = (crop: Partial<ReactCrop.Crop>, image: HTMLImageElement | 
         const oldHeightToWidthRatio = 300 / CROPPER_WIDTH;
         const newHeightToWidthRatio = 400 / 300;
         const { width: imageWidth, height: imageHeight } = image;
+
         const isHeightRestricted = (imageHeight / imageWidth) >= oldHeightToWidthRatio;
         const scaleRatio = isHeightRestricted ? newHeightToWidthRatio : 1;
         const nextX = Math.min((x ?? 0) * scaleRatio, imageWidth);
         const nextY = Math.min((y ?? 0) * scaleRatio, imageHeight);
         const newWidth = Math.min((cropWidth ?? 0) * scaleRatio, imageWidth);
+
         return {
             unit: '%' as 'px' | '%',
             x: nextX / imageWidth * 100,
@@ -169,12 +173,16 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         completed: null as ReactCrop.Crop | null,
     });
     const [isMigrated, setMigrated] = useState(defaultCropInfo.unit === '%');
-    const { current: currentCrop, completed: completedCrop } = crop;
+    const {
+        current: currentCrop,
+        completed: completedCrop,
+    } = crop;
 
     const applyOfflineSource = (fileList: FileList) => {
         const targetFile = fileList[0];
         if (!targetFile) return;
         const maxFileSize = 4;
+
         if (targetFile.size < maxFileSize * 1024 * 1024) {
             setLoading(true);
             const reader = new FileReader();
@@ -194,7 +202,6 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         }
     };
 
-    // ⚡ Fetch via proxy + cache IDB
     useEffect(() => {
         if (sourceType !== 'online' || !externalSource) {
             setProxiedBlobUrl('');
@@ -228,7 +235,9 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 setLoading(false);
             }
         })();
-        return () => { cancelled = true; };
+        return () => {
+            cancelled = true;
+        };
     }, [externalSource, sourceType]);
 
     const pendingCrop = useRef({
@@ -245,15 +254,25 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             setTimeout(() => {
                 if (internalId !== pendingId.current || !pendingCrop.current.crop) return;
                 const normalizedCrop = normalizeCrop(pendingCrop.current.crop, img, ratio);
-                setCrop({ completed: normalizedCrop, current: normalizedCrop });
+                setCrop({
+                    completed: normalizedCrop,
+                    current: normalizedCrop,
+                });
                 setMigrated(true);
-                pendingCrop.current = { source: '', crop: null };
+                pendingCrop.current = {
+                    source: '',
+                    crop: null,
+                };
             }, 250);
         } else {
             setTimeout(() => {
                 setCrop(cur => {
                     const normalizedCrop = normalizeCrop(cur.current, img, ratio);
-                    return { completed: normalizedCrop, current: normalizedCrop };
+
+                    return {
+                        completed: normalizedCrop,
+                        current: normalizedCrop,
+                    };
                 });
                 setMigrated(true);
             }, 250);
@@ -262,6 +281,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
 
     const applyOnlineSource = (e: React.ChangeEvent<HTMLInputElement>) => {
         const source = e.target.value;
+
         setCrossOrigin('anonymous');
         setLoading(true);
         setSourceType('online');
@@ -273,7 +293,9 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     useEffect(() => {
         const image = imgRef.current;
         if (!completedCrop || !receivingCanvas || !image) return;
+
         const { aspect: ratio } = completedCrop;
+
         receivingCanvas.style.transform = 'scale(2)';
         const ctx = receivingCanvas.getContext('2d');
         if (!ctx || typeof ratio !== 'number' || ratio <= 0 || isLoading) return;
@@ -289,8 +311,14 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         let drawWidth = Math.min(naturalWidth, expectedDrawWidth);
         let expectedDrawHeight = Math.floor(expectedDrawWidth / ratio);
         let drawHeight = Math.min(naturalHeight, expectedDrawHeight);
-        let drawCoordinateX = Math.min(naturalWidth, Math.floor((completedCrop.x ?? 0) * (cropUnit === 'px' ? zoomX : naturalWidth / 100)));
-        let drawCoordinateY = Math.min(naturalHeight, Math.floor((completedCrop.y ?? 0) * (cropUnit === 'px' ? zoomY : naturalHeight / 100)));
+        let drawCoordinateX = Math.min(
+            naturalWidth,
+            Math.floor((completedCrop.x ?? 0) * (cropUnit === 'px' ? zoomX : naturalWidth / 100))
+        );
+        let drawCoordinateY = Math.min(
+            naturalHeight,
+            Math.floor((completedCrop.y ?? 0) * (cropUnit === 'px' ? zoomY : naturalHeight / 100))
+        );
         ctx.imageSmoothingQuality = 'high';
         if (drawWidth <= 0 || drawHeight <= 0) return;
 
@@ -310,10 +338,12 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 drawCoordinateX = 0;
                 drawCoordinateY = (naturalHeight - drawHeight) / 2;
                 fitCropData = {
-                    unit: '%', aspect: ratio,
+                    unit: '%',
+                    aspect: ratio,
                     height: drawHeight / naturalHeight * 100,
                     width: drawWidth / naturalWidth * 100,
-                    x: 0, y: drawCoordinateY / naturalHeight * 100,
+                    x: 0,
+                    y: drawCoordinateY / naturalHeight * 100,
                 };
             } else {
                 drawWidth = naturalHeight * ratio;
@@ -321,7 +351,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 drawCoordinateX = (naturalWidth - drawWidth) / 2;
                 drawCoordinateY = 0;
                 fitCropData = {
-                    unit: '%', aspect: ratio,
+                    unit: '%',
+                    aspect: ratio,
                     height: drawHeight / naturalHeight * 100,
                     width: drawWidth / naturalWidth * 100,
                     x: drawCoordinateX / naturalWidth * 100,
@@ -341,19 +372,29 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             }
             receivingCanvas.width = drawWidth;
             receivingCanvas.height = drawHeight;
-            ctx.drawImage(image, 0, 0, naturalWidth, naturalHeight, 0, 0, drawWidth, drawHeight);
+            ctx.drawImage(
+                image,
+                0, 0, naturalWidth, naturalHeight,
+                0, 0, drawWidth, drawHeight,
+            );
         } else {
             receivingCanvas.width = (drawWidth ?? 0);
             receivingCanvas.height = (drawHeight ?? 0);
-            ctx.drawImage(image, drawCoordinateX, drawCoordinateY, drawWidth, drawHeight, 0, 0, drawWidth, drawHeight);
+            ctx.drawImage(
+                image,
+                drawCoordinateX, drawCoordinateY, drawWidth, drawHeight,
+                0, 0, drawWidth, drawHeight,
+            );
         }
-        if (sourceType === 'offline' && (internalSource ?? '').length <= 0) { }
-        else if (ratio === completedCrop.aspect) {
+        if (sourceType === 'offline' && (internalSource ?? '').length <= 0) {
+            // nothing
+        } else if (ratio === completedCrop.aspect) {
             onCropChange(completedCrop, sourceType, interacted);
         }
         if (fitCropData) {
             setCrop(cur => ({ ...cur, current: fitCropData }));
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [completedCrop, receivingCanvas, redrawSignal, forceFit]);
 
     useEffect(() => {
@@ -361,7 +402,10 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         setCrop(cur => {
             if (imgRef.current != null && cur.current) {
                 const newValue = normalizeCrop(cur.current, imgRef.current, ratio);
-                return { current: newValue, completed: newValue };
+                return {
+                    current: newValue,
+                    completed: newValue,
+                };
             }
             return cur;
         });
@@ -387,7 +431,10 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             setCrossOrigin('anonymous');
             setMigrated(cropInfo.unit === '%');
             pendingId.current += 1;
-            pendingCrop.current = { source, crop: cropInfo };
+            pendingCrop.current = {
+                source,
+                crop: cropInfo,
+            };
             setRedrawSignal(cur => cur + 1);
         }
     }));
@@ -406,7 +453,9 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                                 Icon={DownloadOutlined}
                                 containerProps={{ className: isDownloadable ? '' : 'disabled' }}
                                 tooltipProps={{
-                                    overlay: isDownloadable ? language['image-cropper.download'] : language['image-cropper.no-download']
+                                    overlay: isDownloadable
+                                        ? language['image-cropper.download']
+                                        : language['image-cropper.no-download']
                                 }}
                                 onClick={() => (isDownloadable && receivingCanvas) && generateDownload(receivingCanvas, completedCrop)}
                             />
@@ -470,7 +519,9 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             {beforeCropper}
             <div
                 className={mergeClass('card-cropper')}
-                onKeyDown={() => { setInteracted(true); }}
+                onKeyDown={() => {
+                    setInteracted(true);
+                }}
             >
                 <DropZone
                     $visible={activeDropzone > 0}
@@ -491,11 +542,16 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 {(hasImage && !error) && <div className="card-image-option">
                     <Tooltip
                         placement="left"
-                        overlay={forceFit ? language['image-cropper.button.use-crop.tooltip'] : language['image-cropper.button.force-fit.tooltip']}
+                        overlay={forceFit
+                            ? language['image-cropper.button.use-crop.tooltip']
+                            : language['image-cropper.button.force-fit.tooltip']}
                     >
                         <div
                             className={mergeClass('image-option force-fit-option', forceFit ? 'option-active' : '')}
-                            onClick={() => { setInteracted(true); onForceFitChange(!forceFit); }}
+                            onClick={() => {
+                                setInteracted(true);
+                                onForceFitChange(!forceFit);
+                            }}
                         >
                             <FullscreenOutlined />
                         </div>
@@ -505,9 +561,17 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                             setInteracted(true);
                             setCrop(cur => {
                                 const { width, x } = cur.completed ?? {};
+
                                 if (typeof width !== 'number' || typeof x !== 'number') return cur;
-                                const newCrop: ReactCrop.Crop = { ...cur.completed, x: (100 - width) / 2 };
-                                return { current: newCrop, completed: newCrop };
+                                const newCrop: ReactCrop.Crop = {
+                                    ...cur.completed,
+                                    x: (100 - width) / 2,
+                                };
+
+                                return {
+                                    current: newCrop,
+                                    completed: newCrop,
+                                };
                             });
                         }}>
                             <VerticalAlignMiddleOutlined />
@@ -518,9 +582,17 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                             setInteracted(true);
                             setCrop(cur => {
                                 const { height, y } = cur.completed ?? {};
+
                                 if (typeof height !== 'number' || typeof y !== 'number') return cur;
-                                const newCrop: ReactCrop.Crop = { ...cur.completed, y: (100 - height) / 2 };
-                                return { current: newCrop, completed: newCrop };
+                                const newCrop: ReactCrop.Crop = {
+                                    ...cur.completed,
+                                    y: (100 - height) / 2,
+                                };
+
+                                return {
+                                    current: newCrop,
+                                    completed: newCrop,
+                                };
                             });
                         }}>
                             <VerticalAlignMiddleOutlined />
@@ -536,24 +608,45 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                     disabled={forceFit}
                     className={forceFit ? 'force-fitted' : ''}
                     imageStyle={backgroundColor
-                        ? { backgroundColor }
-                        : { backgroundImage: `url("${process.env.PUBLIC_URL}/asset/image/texture/transparent-tile.png")` }}
+                        ? {
+                            backgroundColor,
+                        }
+                        : {
+                            backgroundImage: `url("${process.env.PUBLIC_URL}/asset/image/texture/transparent-tile.png")`
+                        }}
                     onImageLoaded={onLoad}
-                    onImageError={() => { setLoading(false); setError('Image not found'); }}
+                    onImageError={() => {
+                        setLoading(false);
+                        setError('Image not found');
+                    }}
                     crop={currentCrop}
-                    onDragStart={() => { setInteracted(true); }}
+                    onDragStart={() => {
+                        setInteracted(true);
+                    }}
                     onChange={(pixelCropData, percentCropData) => {
                         const image = imgRef.current;
                         if (pendingCrop.current.crop || isLoading) return;
                         if (!isMigrated) {
                             setMigrated(true);
-                            setCrop(cur => ({ ...cur, current: normalizeCrop(pixelCropData, image, ratio) }));
+                            setCrop(cur => {
+                                return {
+                                    ...cur,
+                                    current: normalizeCrop(pixelCropData, image, ratio),
+                                };
+                            });
                         } else {
-                            setCrop(cur => ({ ...cur, current: normalizeCrop(percentCropData, image, ratio) }));
+                            setCrop(cur => {
+                                return {
+                                    ...cur,
+                                    current: normalizeCrop(percentCropData, image, ratio),
+                                };
+                            });
                         }
                     }}
                     onComplete={(_, percentData) => {
-                        if (!pendingCrop.current.crop || isLoading) setCrop(cur => ({ ...cur, completed: percentData }));
+                        if (!pendingCrop.current.crop || isLoading) {
+                            setCrop(cur => ({ ...cur, completed: percentData }));
+                        }
                     }}
                     ruleOfThirds={true}
                     crossorigin={crossorigin}
