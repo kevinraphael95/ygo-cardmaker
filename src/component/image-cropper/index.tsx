@@ -4,7 +4,7 @@ import ReactCrop from 'react-image-crop';
 import { DownloadOutlined, FullscreenOutlined, VerticalAlignMiddleOutlined } from '@ant-design/icons';
 import { Loading } from '../loading';
 import { IconButton } from '../icon-button';
-import { useGlobal, useLanguage, useCard } from 'src/service';
+import { useGlobal, useLanguage } from 'src/service';
 import { mergeClass } from 'src/util';
 import { DropZone } from '../atom';
 import { getCachedImage, setCachedImage } from 'src/draw/image-cache';
@@ -22,29 +22,6 @@ const proxifyExternalUrl = (url: string): string => {
     if (url.startsWith(window.location.origin)) return url;
     const cleaned = url.replace(/^https?:\/\//i, '');
     return CORS_PROXY + encodeURIComponent(cleaned);
-};
-
-// ⚡ Cache nom → ID YGOPRODeck (évite 2x le même appel API)
-const nameToIdCache = new Map<string, string | null>();
-
-const resolveIdByName = async (cardName: string): Promise<string | null> => {
-    if (!cardName || cardName.length < 3) return null;
-    if (nameToIdCache.has(cardName)) return nameToIdCache.get(cardName) ?? null;
-    try {
-        const url = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(cardName)}`;
-        const res = await fetch(url, { mode: 'cors' });
-        if (!res.ok) {
-            nameToIdCache.set(cardName, null);
-            return null;
-        }
-        const data = await res.json();
-        const realId = data?.data?.[0]?.id ? String(data.data[0].id) : null;
-        nameToIdCache.set(cardName, realId);
-        return realId;
-    } catch {
-        nameToIdCache.set(cardName, null);
-        return null;
-    }
 };
 
 function generateDownload(canvas: HTMLCanvasElement | null, crop: ReactCrop.Crop | null) {
@@ -178,8 +155,6 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
 }: ImageCropper, forwardedRef) => {
     const normalizedDefaultSource = defaultSourceType === 'offline' ? 'offline' : 'online';
     const language = useLanguage();
-    // ⚡ Récupère la carte active (pour lire desc + nom)
-    const { card: activeCard } = useCard();
     const fileInputRef = useRef<Input>(null);
     const [crossorigin, setCrossOrigin] = useState<'anonymous' | 'use-credentials' | undefined>('anonymous');
     const [redrawSignal, setRedrawSignal] = useState(0);
@@ -227,10 +202,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         }
     };
 
-    // ⚡ Fetch l'image via proxy + fallback tilde ~English Name~
-    //   1. ID Konami (< 8 chiffres) → YGOPRODeck direct
-    //   2. ID custom (≥ 9 chiffres) → extraire ~English Name~ de la desc
-    //   3. Fallback → chercher par nom de carte
+    // ⚡ Fetch l'image via proxy (l'URL du CSV est déjà correcte)
     useEffect(() => {
         if (sourceType !== 'online' || !externalSource) {
             setProxiedBlobUrl('');
@@ -240,31 +212,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         setLoading(true);
         (async () => {
             try {
-                // ⚡ Étape 1 : extrait l'ID depuis l'URL
-                const idMatch = externalSource.match(/\/(\d+)\.jpg$/);
-                const rawId = idMatch ? idMatch[1] : null;
-
-                // ⚡ Étape 2 : si ID Konami → direct, sinon fallback tilde/nom
-                let realId: string | null = rawId;
-                if (!realId || realId.length > 8) {
-                    // 1. Essai : extraire ~English Name~ de la description
-                    const effect = activeCard?.effect || '';
-                    const tildeMatch = effect.match(/~([^~]+)~/);
-                    if (tildeMatch && tildeMatch[1]) {
-                        const enName = tildeMatch[1].trim();
-                        realId = await resolveIdByName(enName);
-                    }
-                    // 2. Fallback : chercher par nom de carte
-                    if (!realId) {
-                        realId = await resolveIdByName(activeCard?.name ?? '');
-                    }
-                }
-                if (!realId) throw new Error('No YGOPRODeck ID');
-
-                const rawUrl = `https://images.ygoprodeck.com/images/cards_cropped/${realId}.jpg`;
-
-                // ⚡ Étape 3 : vérifie le cache IDB d'abord
-                const cached = await getCachedImage(rawUrl);
+                const url = proxifyExternalUrl(externalSource);
+                const cached = await getCachedImage(externalSource);
                 if (cached) {
                     if (cancelled) return;
                     setProxiedBlobUrl(URL.createObjectURL(cached));
@@ -272,14 +221,10 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                     setLoading(false);
                     return;
                 }
-
-                // ⚡ Étape 4 : fetch via proxy
-                const proxyUrl = proxifyExternalUrl(rawUrl);
-                const res = await fetch(proxyUrl, { mode: 'cors' });
+                const res = await fetch(url, { mode: 'cors' });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const blob = await res.blob();
-                await setCachedImage(rawUrl, blob);
-
+                await setCachedImage(externalSource, blob);
                 if (cancelled) return;
                 setProxiedBlobUrl(URL.createObjectURL(blob));
                 setError(null);
@@ -294,7 +239,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         return () => {
             cancelled = true;
         };
-    }, [externalSource, sourceType, activeCard?.effect, activeCard?.name]);
+    }, [externalSource, sourceType]);
 
     const pendingCrop = useRef({
         source: '',
@@ -600,7 +545,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                         placement="left"
                         overlay={forceFit
                             ? language['image-cropper.button.use-crop.tooltip']
-                            : language['image-cropper.button.force-fit.tooltip']}
+                            : language['image-cropper.button.fit.tooltip']}
                     >
                         <div
                             className={mergeClass('image-option force-fit-option', forceFit ? 'option-active' : '')}
