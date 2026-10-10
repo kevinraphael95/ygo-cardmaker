@@ -4,7 +4,7 @@ import ReactCrop from 'react-image-crop';
 import { DownloadOutlined, FullscreenOutlined, VerticalAlignMiddleOutlined } from '@ant-design/icons';
 import { Loading } from '../loading';
 import { IconButton } from '../icon-button';
-import { useGlobal, useLanguage, useCard } from 'src/service';
+import { useGlobal, useLanguage } from 'src/service';
 import { mergeClass } from 'src/util';
 import { DropZone } from '../atom';
 import { getCachedImage, setCachedImage } from 'src/draw/image-cache';
@@ -13,8 +13,6 @@ import './image-cropper.scss';
 
 export const CROPPER_WIDTH = 375;
 
-// ⚡ Proxy CORS pour les images externes (YGOPRODeck, etc.)
-// YGOPRODeck ne renvoie pas les headers CORS → canvas tainted → export impossible
 const CORS_PROXY = 'https://images.weserv.nl/?url=';
 
 const proxifyExternalUrl = (url: string): string => {
@@ -26,41 +24,16 @@ const proxifyExternalUrl = (url: string): string => {
     return CORS_PROXY + encodeURIComponent(cleaned);
 };
 
-// ⚡ Cache nom → ID YGOPRODeck (évite 2x le même appel API)
-const nameToIdCache = new Map<string, string | null>();
-
-const resolveIdByName = async (cardName: string): Promise<string | null> => {
-    if (!cardName || cardName.length < 3) return null;
-    if (nameToIdCache.has(cardName)) return nameToIdCache.get(cardName) ?? null;
-    try {
-        const url = `https://db.ygoprodeck.com/api/v7/cardinfo.php?name=${encodeURIComponent(cardName)}`;
-        const res = await fetch(url, { mode: 'cors' });
-        if (!res.ok) {
-            nameToIdCache.set(cardName, null);
-            return null;
-        }
-        const data = await res.json();
-        const realId = data?.data?.[0]?.id ? String(data.data[0].id) : null;
-        nameToIdCache.set(cardName, realId);
-        return realId;
-    } catch {
-        nameToIdCache.set(cardName, null);
-        return null;
-    }
-};
-
 function generateDownload(canvas: HTMLCanvasElement | null, crop: ReactCrop.Crop | null) {
     if (!crop || !canvas) return;
     canvas.toBlob(
         (blob) => {
             if (blob !== null) {
                 const previewUrl = window.URL.createObjectURL(blob);
-
                 const anchor = document.createElement('a');
                 anchor.download = 'crop-preview.png';
                 anchor.href = URL.createObjectURL(blob);
                 anchor.click();
-
                 window.URL.revokeObjectURL(previewUrl);
             }
         },
@@ -81,27 +54,19 @@ export const isCropEqual = (cropL: Partial<ReactCrop.Crop>, cropR: Partial<React
     return true;
 };
 
-/**
- * Historic reason: cropData initially used `px` as unit, but this create a hard link between cropData and size of the cropper (NOT the actual image). This means the cropData only match a specific cropper size, and will become incorrect if the size change (which is happening when we got to v2).
- * 
- * So from now on every cropData with `px` unit in it (old data) will be converted into the new one that use `%` data, which is more tricky to calculate but remove the link entirely.
- */
 const normalizeCrop = (crop: Partial<ReactCrop.Crop>, image: HTMLImageElement | null, ratio: number) => {
     if (!image) return crop;
     const { width: cropWidth, height: cropHeight, x = 0, y = 0, unit } = crop;
 
-    /** Migrate old unit */
     if (unit === 'px') {
         const oldHeightToWidthRatio = 300 / CROPPER_WIDTH;
         const newHeightToWidthRatio = 400 / 300;
         const { width: imageWidth, height: imageHeight } = image;
-
         const isHeightRestricted = (imageHeight / imageWidth) >= oldHeightToWidthRatio;
         const scaleRatio = isHeightRestricted ? newHeightToWidthRatio : 1;
         const nextX = Math.min((x ?? 0) * scaleRatio, imageWidth);
         const nextY = Math.min((y ?? 0) * scaleRatio, imageHeight);
         const newWidth = Math.min((cropWidth ?? 0) * scaleRatio, imageWidth);
-
         return {
             unit: '%' as 'px' | '%',
             x: nextX / imageWidth * 100,
@@ -117,29 +82,17 @@ const normalizeCrop = (crop: Partial<ReactCrop.Crop>, image: HTMLImageElement | 
     const { naturalHeight, naturalWidth } = image;
     const width = cropWidth ?? 0;
     const height = cropHeight ?? 0;
-    /** Avoid recalculate if current ratio is in acceptable limit, so we don't cascade calculation error */
     const acceptableError = (naturalHeight > naturalWidth ? naturalHeight : naturalWidth) * 0.05;
     const isRatioAcceptable = Math.abs(height * naturalHeight * ratio - width * naturalWidth) <= acceptableError;
     const nextHeight = isRatioAcceptable
         ? height
-        : width * image.naturalWidth /** Restore original size */
-            / ratio /** Get height with corresponding aspect ratio */
-            / image.naturalHeight /** Convert back to percent */;
+        : width * image.naturalWidth / ratio / image.naturalHeight;
 
-    /** If next height exceed the current image, we resize and center everything so it fit the current image */
     const oversizeRatio = nextHeight / 100;
-    const normalizedHeight = oversizeRatio > 1
-        ? 100
-        : nextHeight;
-    const normalizedWidth = oversizeRatio > 1
-        ? width / oversizeRatio
-        : width;
-    const normalizedX = oversizeRatio > 1
-        ? (100 - normalizedWidth) / 2
-        : (x < 0 ? 0 : x);
-    const normalizedY = oversizeRatio > 1
-        ? 0
-        : (y < 0 ? 0 : y);
+    const normalizedHeight = oversizeRatio > 1 ? 100 : nextHeight;
+    const normalizedWidth = oversizeRatio > 1 ? width / oversizeRatio : width;
+    const normalizedX = oversizeRatio > 1 ? (100 - normalizedWidth) / 2 : (x < 0 ? 0 : x);
+    const normalizedY = oversizeRatio > 1 ? 0 : (y < 0 ? 0 : y);
 
     return {
         ...crop,
@@ -160,7 +113,6 @@ export type ImageCropper = {
     title?: React.ReactNode,
     backgroundColor?: string,
     className?: string,
-    /** Stretch or squeeze image so it fit with the provided ratio */
     forceFit?: boolean,
     defaultSourceType?: string,
     defaultInternalSource?: string,
@@ -197,17 +149,10 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     onMaxSizeExceeded = () => { },
     onForceFitChange = () => { },
 }: ImageCropper, forwardedRef) => {
-    const normalizedDefaultSource = defaultSourceType === 'offline'
-        ? 'offline'
-        : 'online';
+    const normalizedDefaultSource = defaultSourceType === 'offline' ? 'offline' : 'online';
     const language = useLanguage();
-    // ⚡ Récupère la carte active pour le fallback nom→ID
-    const { card: activeCard } = useCard();
     const fileInputRef = useRef<Input>(null);
-    const [
-        crossorigin,
-        setCrossOrigin,
-    ] = useState<'anonymous' | 'use-credentials' | undefined>('anonymous');
+    const [crossorigin, setCrossOrigin] = useState<'anonymous' | 'use-credentials' | undefined>('anonymous');
     const [redrawSignal, setRedrawSignal] = useState(0);
     const [sourceType, setSourceType] = useState<'offline' | 'online'>(normalizedDefaultSource);
     const [inputMode, setInputMode] = useState<'offline' | 'online'>(normalizedDefaultSource);
@@ -217,25 +162,19 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     const [error, setError] = useState<any>(null);
     const [interacted, setInteracted] = useState(false);
     const [externalSource, setExternalSource] = useState(defaultExternalSource);
-    // ⚡ Blob URL de l'image téléchargée via proxy (évite le canvas tainted)
     const [proxiedBlobUrl, setProxiedBlobUrl] = useState('');
     const imgRef = useRef<HTMLImageElement | null>(null);
     const [crop, setCrop] = useState({
         current: defaultCropInfo,
         completed: null as ReactCrop.Crop | null,
     });
-    // const [completedCrop, setCompletedCrop] = useState<ReactCrop.Crop | null>(null);
     const [isMigrated, setMigrated] = useState(defaultCropInfo.unit === '%');
-    const {
-        current: currentCrop,
-        completed: completedCrop,
-    } = crop;
+    const { current: currentCrop, completed: completedCrop } = crop;
 
     const applyOfflineSource = (fileList: FileList) => {
         const targetFile = fileList[0];
         if (!targetFile) return;
         const maxFileSize = 4;
-
         if (targetFile.size < maxFileSize * 1024 * 1024) {
             setLoading(true);
             const reader = new FileReader();
@@ -255,9 +194,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         }
     };
 
-    // ⚡ Fetch l'image via proxy → si OK, on crée un blob URL (jamais tainted)
-    //     Si l'ID est custom (VAACT, etc.) → résolution par nom via l'API YGOPRODeck
-    //     Si 404 → pas d'image (mais pas d'erreur bloquante)
+    // ⚡ Fetch via proxy + cache IDB
     useEffect(() => {
         if (sourceType !== 'online' || !externalSource) {
             setProxiedBlobUrl('');
@@ -267,21 +204,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         setLoading(true);
         (async () => {
             try {
-                // ⚡ Étape 1 : extrait l'ID depuis l'URL
-                const idMatch = externalSource.match(/\/(\d+)\.jpg$/);
-                const rawId = idMatch ? idMatch[1] : null;
-
-                // ⚡ Étape 2 : ID court (< 8 chiffres) = vrai passcode Konami
-                //             sinon custom → résoudre par nom
-                let realId: string | null = rawId;
-                if (!realId || realId.length > 8) {
-                    realId = await resolveIdByName(activeCard?.name ?? '');
-                }
-                if (!realId) throw new Error('No YGOPRODeck ID');
-
-                // ⚡ Étape 3 : vérifie le cache IDB d'abord
-                const rawUrl = `https://images.ygoprodeck.com/images/cards_cropped/${realId}.jpg`;
-                const cached = await getCachedImage(rawUrl);
+                const url = proxifyExternalUrl(externalSource);
+                const cached = await getCachedImage(externalSource);
                 if (cached) {
                     if (cancelled) return;
                     setProxiedBlobUrl(URL.createObjectURL(cached));
@@ -289,14 +213,10 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                     setLoading(false);
                     return;
                 }
-
-                // ⚡ Étape 4 : fetch via proxy
-                const proxyUrl = proxifyExternalUrl(rawUrl);
-                const res = await fetch(proxyUrl, { mode: 'cors' });
+                const res = await fetch(url, { mode: 'cors' });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const blob = await res.blob();
-                await setCachedImage(rawUrl, blob);
-
+                await setCachedImage(externalSource, blob);
                 if (cancelled) return;
                 setProxiedBlobUrl(URL.createObjectURL(blob));
                 setError(null);
@@ -308,10 +228,8 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 setLoading(false);
             }
         })();
-        return () => {
-            cancelled = true;
-        };
-    }, [externalSource, sourceType, activeCard?.name]);
+        return () => { cancelled = true; };
+    }, [externalSource, sourceType]);
 
     const pendingCrop = useRef({
         source: '',
@@ -322,31 +240,20 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         setError(null);
         onSourceLoaded(crossorigin);
         imgRef.current = img;
-        /** @todo Check if we really need timeout delay here */
         if (img.src === pendingCrop.current.source && pendingCrop.current.crop) {
             const internalId = pendingId.current;
             setTimeout(() => {
                 if (internalId !== pendingId.current || !pendingCrop.current.crop) return;
                 const normalizedCrop = normalizeCrop(pendingCrop.current.crop, img, ratio);
-                setCrop({
-                    completed: normalizedCrop,
-                    current: normalizedCrop,
-                });
+                setCrop({ completed: normalizedCrop, current: normalizedCrop });
                 setMigrated(true);
-                pendingCrop.current = {
-                    source: '',
-                    crop: null,
-                };
+                pendingCrop.current = { source: '', crop: null };
             }, 250);
         } else {
             setTimeout(() => {
                 setCrop(cur => {
                     const normalizedCrop = normalizeCrop(cur.current, img, ratio);
-
-                    return {
-                        completed: normalizedCrop,
-                        current: normalizedCrop,
-                    };
+                    return { completed: normalizedCrop, current: normalizedCrop };
                 });
                 setMigrated(true);
             }, 250);
@@ -355,7 +262,6 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
 
     const applyOnlineSource = (e: React.ChangeEvent<HTMLInputElement>) => {
         const source = e.target.value;
-
         setCrossOrigin('anonymous');
         setLoading(true);
         setSourceType('online');
@@ -367,10 +273,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     useEffect(() => {
         const image = imgRef.current;
         if (!completedCrop || !receivingCanvas || !image) return;
-
         const { aspect: ratio } = completedCrop;
-
-        /** Increase image size for a bit */
         receivingCanvas.style.transform = 'scale(2)';
         const ctx = receivingCanvas.getContext('2d');
         if (!ctx || typeof ratio !== 'number' || ratio <= 0 || isLoading) return;
@@ -382,53 +285,35 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         const pixelRatio = window.devicePixelRatio;
 
         ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-        /** Snap sizing into whole pixel for a more crispy image. */
         let expectedDrawWidth = Math.floor((completedCrop.width ?? 0) * (cropUnit === 'px' ? zoomX : naturalWidth / 100));
         let drawWidth = Math.min(naturalWidth, expectedDrawWidth);
         let expectedDrawHeight = Math.floor(expectedDrawWidth / ratio);
         let drawHeight = Math.min(naturalHeight, expectedDrawHeight);
-        let drawCoordinateX = Math.min(
-            naturalWidth,
-            Math.floor((completedCrop.x ?? 0) * (cropUnit === 'px' ? zoomX : naturalWidth / 100))
-        );
-        let drawCoordinateY = Math.min(
-            naturalHeight,
-            Math.floor((completedCrop.y ?? 0) * (cropUnit === 'px' ? zoomY : naturalHeight / 100))
-        );
+        let drawCoordinateX = Math.min(naturalWidth, Math.floor((completedCrop.x ?? 0) * (cropUnit === 'px' ? zoomX : naturalWidth / 100)));
+        let drawCoordinateY = Math.min(naturalHeight, Math.floor((completedCrop.y ?? 0) * (cropUnit === 'px' ? zoomY : naturalHeight / 100)));
         ctx.imageSmoothingQuality = 'high';
         if (drawWidth <= 0 || drawHeight <= 0) return;
 
         let fitCropData: Partial<ReactCrop.Crop> | undefined = undefined;
-        /** If the crop section is overflowed (mainly because change of ratio), we try to snap it back to the cropper. */
         if (
-            // Size overflow
             (drawCoordinateX + drawWidth) > naturalWidth
             || (drawCoordinateY + drawHeight) > naturalHeight
-            // Edge overflow
             || drawCoordinateX < 0
             || drawCoordinateY < 0
-            // Ratio overflow
             || Math.abs((expectedDrawWidth - drawWidth) / drawWidth) > 0.01
             || Math.abs((expectedDrawHeight - drawHeight) / drawHeight) > 0.01
         ) {
-            /** Try to maximize new crop section's area */
             const prominentSide = ratio * naturalHeight > naturalWidth ? 'width' : 'height';
-            /**
-             * Automatically center current crop section.
-             * @todo For the best UX, it should actually be proportional based on the x and y before the snap.
-             * */
             if (prominentSide === 'width') {
                 drawWidth = naturalWidth;
                 drawHeight = drawWidth / ratio;
                 drawCoordinateX = 0;
                 drawCoordinateY = (naturalHeight - drawHeight) / 2;
                 fitCropData = {
-                    unit: '%',
-                    aspect: ratio,
+                    unit: '%', aspect: ratio,
                     height: drawHeight / naturalHeight * 100,
                     width: drawWidth / naturalWidth * 100,
-                    x: 0,
-                    y: drawCoordinateY / naturalHeight * 100,
+                    x: 0, y: drawCoordinateY / naturalHeight * 100,
                 };
             } else {
                 drawWidth = naturalHeight * ratio;
@@ -436,8 +321,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 drawCoordinateX = (naturalWidth - drawWidth) / 2;
                 drawCoordinateY = 0;
                 fitCropData = {
-                    unit: '%',
-                    aspect: ratio,
+                    unit: '%', aspect: ratio,
                     height: drawHeight / naturalHeight * 100,
                     width: drawWidth / naturalWidth * 100,
                     x: drawCoordinateX / naturalWidth * 100,
@@ -445,8 +329,6 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 };
             }
         }
-        // const boundingWidth = Math.ceil(receivingCanvas.getBoundingClientRect().width);
-        // const boundingHeight = Math.ceil(receivingCanvas.getBoundingClientRect().height);
 
         if (forceFit) {
             const prominentSide = ratio * naturalHeight > naturalWidth ? 'width' : 'height';
@@ -459,31 +341,11 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             }
             receivingCanvas.width = drawWidth;
             receivingCanvas.height = drawHeight;
-            ctx.drawImage(
-                image,
-                0,
-                0,
-                naturalWidth,
-                naturalHeight,
-                0,
-                0,
-                drawWidth,
-                drawHeight,
-            );
+            ctx.drawImage(image, 0, 0, naturalWidth, naturalHeight, 0, 0, drawWidth, drawHeight);
         } else {
             receivingCanvas.width = (drawWidth ?? 0);
             receivingCanvas.height = (drawHeight ?? 0);
-            ctx.drawImage(
-                image,
-                drawCoordinateX,
-                drawCoordinateY,
-                drawWidth,
-                drawHeight,
-                0,
-                0,
-                drawWidth,
-                drawHeight,
-            );
+            ctx.drawImage(image, drawCoordinateX, drawCoordinateY, drawWidth, drawHeight, 0, 0, drawWidth, drawHeight);
         }
         if (sourceType === 'offline' && (internalSource ?? '').length <= 0) { }
         else if (ratio === completedCrop.aspect) {
@@ -492,7 +354,6 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         if (fitCropData) {
             setCrop(cur => ({ ...cur, current: fitCropData }));
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [completedCrop, receivingCanvas, redrawSignal, forceFit]);
 
     useEffect(() => {
@@ -500,10 +361,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
         setCrop(cur => {
             if (imgRef.current != null && cur.current) {
                 const newValue = normalizeCrop(cur.current, imgRef.current, ratio);
-                return {
-                    current: newValue,
-                    completed: newValue,
-                };
+                return { current: newValue, completed: newValue };
             }
             return cur;
         });
@@ -529,10 +387,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             setCrossOrigin('anonymous');
             setMigrated(cropInfo.unit === '%');
             pendingId.current += 1;
-            pendingCrop.current = {
-                source,
-                crop: cropInfo,
-            };
+            pendingCrop.current = { source, crop: cropInfo };
             setRedrawSignal(cur => cur + 1);
         }
     }));
@@ -540,7 +395,6 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
     const hasImage = (sourceType === 'offline' && (internalSource ?? '').length > 0)
         || (sourceType === 'online' && (externalSource ?? '').length > 0);
     const isDownloadable = receivingCanvas && hasImage && !isLoading && completedCrop?.width && completedCrop?.height;
-    // ⚡ Source finale pour ReactCrop : offline = source interne, online = blob URL du proxy
     const finalSource = sourceType === 'offline' ? internalSource : proxiedBlobUrl;
     return (
         <div className={mergeClass('card-image-cropper', className)}>
@@ -552,9 +406,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                                 Icon={DownloadOutlined}
                                 containerProps={{ className: isDownloadable ? '' : 'disabled' }}
                                 tooltipProps={{
-                                    overlay: isDownloadable
-                                        ? language['image-cropper.download']
-                                        : language['image-cropper.no-download']
+                                    overlay: isDownloadable ? language['image-cropper.download'] : language['image-cropper.no-download']
                                 }}
                                 onClick={() => (isDownloadable && receivingCanvas) && generateDownload(receivingCanvas, completedCrop)}
                             />
@@ -575,25 +427,16 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                                     } else {
                                         onSourceChange('online', externalSource);
                                     }
-                                    // setLoading(true);
                                 }
                             }}
                             value={inputMode}
                         >
-                            <Tooltip
-                                title={<div className="image-info">
-                                    {language['image-cropper.online-tip']}
-                                </div>}
-                            >
+                            <Tooltip title={<div className="image-info">{language['image-cropper.online-tip']}</div>}>
                                 <Radio.Button value={'online'} checked={inputMode === 'online'}>
                                     {language['image-cropper.source.online.tooltip']}
                                 </Radio.Button>
                             </Tooltip>
-                            <Tooltip
-                                title={<div className="image-warning">
-                                    {language['image-cropper.offline-warning']}
-                                </div>}
-                            >
+                            <Tooltip title={<div className="image-warning">{language['image-cropper.offline-warning']}</div>}>
                                 <Radio.Button value={'offline'} checked={inputMode === 'offline'}>
                                     {language['image-cropper.source.offline.tooltip']}
                                 </Radio.Button>
@@ -627,10 +470,7 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
             {beforeCropper}
             <div
                 className={mergeClass('card-cropper')}
-                onKeyDown={() => {
-                    /** Nudge selection also count as user interaction */
-                    setInteracted(true);
-                }}
+                onKeyDown={() => { setInteracted(true); }}
             >
                 <DropZone
                     $visible={activeDropzone > 0}
@@ -640,10 +480,6 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                         e.preventDefault();
                         setActiveDropzone(0);
                         if (e.currentTarget.classList.contains('drop-zone')) {
-                            // const itemList = e.dataTransfer.items;
-                            // for (let cnt = 0; cnt < itemList.length; cnt++) {
-                            //     itemList[cnt].getAsString((value) => {/** Redundant to support paste image link here */ });
-                            // }
                             const fileList = e.dataTransfer.files;
                             applyOfflineSource(fileList);
                         }
@@ -655,16 +491,11 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                 {(hasImage && !error) && <div className="card-image-option">
                     <Tooltip
                         placement="left"
-                        overlay={forceFit
-                            ? language['image-cropper.button.use-crop.tooltip']
-                            : language['image-cropper.button.force-fit.tooltip']}
+                        overlay={forceFit ? language['image-cropper.button.use-crop.tooltip'] : language['image-cropper.button.force-fit.tooltip']}
                     >
                         <div
                             className={mergeClass('image-option force-fit-option', forceFit ? 'option-active' : '')}
-                            onClick={() => {
-                                setInteracted(true);
-                                onForceFitChange(!forceFit);
-                            }}
+                            onClick={() => { setInteracted(true); onForceFitChange(!forceFit); }}
                         >
                             <FullscreenOutlined />
                         </div>
@@ -674,17 +505,9 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                             setInteracted(true);
                             setCrop(cur => {
                                 const { width, x } = cur.completed ?? {};
-
                                 if (typeof width !== 'number' || typeof x !== 'number') return cur;
-                                const newCrop: ReactCrop.Crop = {
-                                    ...cur.completed,
-                                    x: (100 - width) / 2,
-                                };
-
-                                return {
-                                    current: newCrop,
-                                    completed: newCrop,
-                                };
+                                const newCrop: ReactCrop.Crop = { ...cur.completed, x: (100 - width) / 2 };
+                                return { current: newCrop, completed: newCrop };
                             });
                         }}>
                             <VerticalAlignMiddleOutlined />
@@ -695,17 +518,9 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                             setInteracted(true);
                             setCrop(cur => {
                                 const { height, y } = cur.completed ?? {};
-
                                 if (typeof height !== 'number' || typeof y !== 'number') return cur;
-                                const newCrop: ReactCrop.Crop = {
-                                    ...cur.completed,
-                                    y: (100 - height) / 2,
-                                };
-
-                                return {
-                                    current: newCrop,
-                                    completed: newCrop,
-                                };
+                                const newCrop: ReactCrop.Crop = { ...cur.completed, y: (100 - height) / 2 };
+                                return { current: newCrop, completed: newCrop };
                             });
                         }}>
                             <VerticalAlignMiddleOutlined />
@@ -721,39 +536,20 @@ export const ImageCropper = forwardRef<ImageCropperRef, ImageCropper>(({
                     disabled={forceFit}
                     className={forceFit ? 'force-fitted' : ''}
                     imageStyle={backgroundColor
-                        ? {
-                            backgroundColor,
-                        }
-                        : {
-                            backgroundImage: `url("${process.env.PUBLIC_URL}/asset/image/texture/transparent-tile.png")`
-                        }}
+                        ? { backgroundColor }
+                        : { backgroundImage: `url("${process.env.PUBLIC_URL}/asset/image/texture/transparent-tile.png")` }}
                     onImageLoaded={onLoad}
-                    onImageError={() => {
-                        setLoading(false);
-                        setError('Image not found');
-                    }}
+                    onImageError={() => { setLoading(false); setError('Image not found'); }}
                     crop={currentCrop}
-                    onDragStart={() => {
-                        setInteracted(true);
-                    }}
+                    onDragStart={() => { setInteracted(true); }}
                     onChange={(pixelCropData, percentCropData) => {
                         const image = imgRef.current;
                         if (pendingCrop.current.crop || isLoading) return;
                         if (!isMigrated) {
                             setMigrated(true);
-                            setCrop(cur => {
-                                return {
-                                    ...cur,
-                                    current: normalizeCrop(pixelCropData, image, ratio)
-                                };
-                            });
+                            setCrop(cur => ({ ...cur, current: normalizeCrop(pixelCropData, image, ratio) }));
                         } else {
-                            setCrop(cur => {
-                                return {
-                                    ...cur,
-                                    current: normalizeCrop(percentCropData, image, ratio)
-                                };
-                            });
+                            setCrop(cur => ({ ...cur, current: normalizeCrop(percentCropData, image, ratio) }));
                         }
                     }}
                     onComplete={(_, percentData) => {
